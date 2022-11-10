@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "mvn clean && mvn package",
+            "group": "build",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+        },
+        {
+            "label": "run",
+            "type": "shell",
+            "command": "hdfs dfs -rm -r /input || : && hdfs dfs -put input / || : && hadoop jar target/hadoop-1.0-SNAPSHOT.jar /input /output",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "group": "build"
+        }
+    ]
+}
