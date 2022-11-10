@@ -202,6 +202,8 @@ public class InvertIndex {
     fileSystem.delete(new Path(otherArgs[otherArgs.length - 1]), true);
     fileSystem.delete(new Path("/job1"), true);
 
+    
+
     JobControl ctl = new JobControl("InvertIndexGroup");
 
     // job1

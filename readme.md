@@ -40,6 +40,18 @@ documentId sentences
 
 ### PYTHON(SPARK)
 
-待补充
+#### 第三方包
+./python/jieba.zip
+
+#### 运行
+VSCode `ctrl+shift+B` 启动 tasks
+
+1. 运行(run)
+
+#### 输入目录
+hdfs://{hdfsip}:9000/input
+
+#### 输出目录
+hdfs://{hdfsip}:9000/output
 
 
