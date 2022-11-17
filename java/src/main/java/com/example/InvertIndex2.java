@@ -1,12 +1,16 @@
 package com.example;
 
+import java.io.BufferedReader;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.io.InputStreamReader;
 import java.util.ArrayList;
-import java.util.List;
+import java.util.HashMap;
+import java.util.HashSet;
 
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FSDataInputStream;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.io.LongWritable;
@@ -22,10 +26,7 @@ import org.apache.hadoop.mapreduce.lib.jobcontrol.ControlledJob;
 import org.apache.hadoop.mapreduce.lib.jobcontrol.JobControl;
 import org.apache.hadoop.util.GenericOptionsParser;
 
-import com.huaban.analysis.jieba.*;
-import com.huaban.analysis.jieba.JiebaSegmenter.SegMode;
-
-public class InvertIndex {
+public class InvertIndex2 {
 
   public static class WordDocId implements WritableComparable<WordDocId> {
 
@@ -82,15 +83,59 @@ public class InvertIndex {
     private WordDocId wordDocId = new WordDocId();
     private LongWritable one = new LongWritable(1);
 
+    private int lexiconTreeLength = 1;
+    private HashMap<Character, Integer>[] lexiconTree = new HashMap[500000];
+    private HashSet<Integer> isWord = new HashSet<Integer>();
+
+    public void setup(Context context) throws IOException {
+      // 读取字典，创建字典树
+      Configuration configuration = context.getConfiguration();
+      FileSystem fs = FileSystem.get(configuration);
+      FSDataInputStream input = fs.open(new Path("/dict/dict.txt"));
+      BufferedReader reader = new BufferedReader(new InputStreamReader(input));
+      String line = reader.readLine();
+      lexiconTree[0] = new HashMap<Character, Integer>();
+      while (line != null) {
+        String word = line.split(" ")[0];
+        int pointer = 0;
+        for (int i = 0; i < word.length(); ++i) {
+          if (!lexiconTree[pointer].containsKey(word.charAt(i))) {
+            lexiconTree[pointer].put(word.charAt(i), lexiconTreeLength);
+            lexiconTree[lexiconTreeLength] = new HashMap<Character,Integer>();
+            ++lexiconTreeLength;
+          }
+          pointer = lexiconTree[pointer].get(word.charAt(i));
+        }
+        isWord.add(pointer);
+        line = reader.readLine();
+      }
+    }
+
     public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
-      JiebaSegmenter segmenter = new JiebaSegmenter();
       String[] ctx = value.toString().split("\t");
       if (ctx.length == 2) {
         wordDocId.setDocId(ctx[0]);
-        List<SegToken> list = segmenter.process(ctx[1], SegMode.INDEX);
-        for (SegToken token : list) {
-          wordDocId.setWord(token.word);
-          context.write(wordDocId, one);
+        String sentence = ctx[1];
+        for (int index = 0; index < sentence.length(); ++index) {
+          int pointer = 0;
+          int r = index;
+          ArrayList<String> list = new ArrayList<String>();
+          StringBuffer buffer = new StringBuffer();
+          while (r < sentence.length() && lexiconTree[pointer].containsKey(sentence.charAt(r))) {
+            buffer.append(sentence.charAt(r));
+            pointer = lexiconTree[pointer].get(sentence.charAt(r));
+            if (isWord.contains(pointer)) {
+              list.add(buffer.toString());
+            }
+            ++r;
+          }
+          // if (list.isEmpty()) {
+          //   list.add(Character.toString(sentence.charAt(index)));
+          // }
+          for (String word : list) {
+            wordDocId.setWord(word);
+            context.write(wordDocId, one);
+          }
         }
       }
     }

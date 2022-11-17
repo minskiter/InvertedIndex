@@ -72,7 +72,7 @@
           <configuration>
              <transformers>
             <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                <mainClass>com.example.InvertIndex</mainClass>
+                <mainClass>com.example.InvertIndex2</mainClass>
             </transformer>
         </transformers>
           </configuration>
