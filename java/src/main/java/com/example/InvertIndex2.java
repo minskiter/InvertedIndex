@@ -246,8 +246,6 @@ public class InvertIndex2 {
     fileSystem.delete(new Path(otherArgs[otherArgs.length - 1]), true);
     fileSystem.delete(new Path("/job1"), true);
 
-    JobControl ctl = new JobControl("InvertIndexGroup");
-
     // job1
     Job job1 = Job.getInstance(conf, "Word Frequency Counter");
 
@@ -269,10 +267,7 @@ public class InvertIndex2 {
     FileOutputFormat.setOutputPath(job1,
         new Path("/job1"));
 
-    ControlledJob cjob1 = new ControlledJob(conf);
-    cjob1.setJob(job1);
-
-    ctl.addJob(cjob1);
+    job1.waitForCompletion(true);
 
     // job2
     Job job2 = Job.getInstance(conf, "Invert Index");
@@ -291,30 +286,7 @@ public class InvertIndex2 {
 
     FileOutputFormat.setOutputPath(job2, new Path(otherArgs[otherArgs.length - 1]));
 
-    ControlledJob cjob2 = new ControlledJob(conf);
-    cjob2.setJob(job2);
-    cjob2.addDependingJob(cjob1);
-    ctl.addJob(cjob2);
-
-    Thread thread = new Thread(ctl);
-    thread.start();
-
-    while (true) {
-      if (ctl.allFinished()) {
-        ctl.stop();
-        System.out.println(ctl.getSuccessfulJobList());
-        System.out.println(ctl.getFailedJobList());
-        fileSystem.delete(new Path("/job1"), true);
-        System.exit(0);
-      }
-      if (ctl.getFailedJobList().size() > 0) {
-        ctl.stop();
-        System.out.println(ctl.getSuccessfulJobList());
-        System.out.println(ctl.getFailedJobList());
-        fileSystem.delete(new Path("/job1"), true);
-        System.exit(1);
-      }
-      Thread.sleep(10);
-    }
+    job2.waitForCompletion(true);
+   
   }
 }
