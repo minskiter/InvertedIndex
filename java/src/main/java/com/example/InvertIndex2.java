@@ -210,10 +210,16 @@ public class InvertIndex2 {
 
   public static class DocIdFrequencyArray implements Writable {
 
-    private ArrayList<DocIdFrequency> data = new ArrayList<>();
+    private ArrayList<DocIdFrequency> data;
 
     public ArrayList<DocIdFrequency> getData() {
       return data;
+    }
+
+    public void init() {
+      if (data == null) {
+        data = new ArrayList<>();
+      }
     }
 
     public void setData(ArrayList<DocIdFrequency> data) {
@@ -221,22 +227,37 @@ public class InvertIndex2 {
     }
 
     public void add(DocIdFrequency docIdFrequency) {
+      init();
       data.add(docIdFrequency);
     }
 
+    public boolean isEmpty(){
+      return size()==0;
+    }
+
     public int size() {
+      if (data == null)
+        return 0;
       return data.size();
     }
 
     public void clear() {
+      if (data == null)
+        return;
       data.clear();
     }
 
-    public DocIdFrequency get(Integer index) {
+    public DocIdFrequency get(Integer index) throws IndexOutOfBoundsException {
+      if (data == null) {
+        throw new IndexOutOfBoundsException("data is null");
+      }
       return data.get(index);
     }
 
     public DocIdFrequencyArray clone() {
+      if (data == null) {
+        return null;
+      }
       DocIdFrequencyArray array = new DocIdFrequencyArray();
       for (DocIdFrequency docIdFrequency : data) {
         array.add(docIdFrequency.clone());
@@ -248,12 +269,13 @@ public class InvertIndex2 {
     public void write(DataOutput out) throws IOException {
       int length = 0;
       if (data != null) {
-        length = data.size();
+        length = data.size();  
       }
       out.writeInt(length);
+      if (data!=null)
       for (DocIdFrequency docIdFrequency : data) {
         docIdFrequency.write(out);
-      }
+      }   
     }
 
     @Override
@@ -268,6 +290,7 @@ public class InvertIndex2 {
     }
 
     public String toString() {
+      if (data==null) return "";
       return data.stream().map(DocIdFrequency::toString).collect(Collectors.joining(", "));
     }
 
@@ -280,12 +303,12 @@ public class InvertIndex2 {
 
     public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
       String[] values = value.toString().split("\t");
+      if (array.isEmpty())
+        array.add(this.value);
       if (values.length == 3) {
         this.word.set(values[0]);
         this.value.setDocId(values[1]);
         this.value.setFrequency(Long.parseLong(values[2]));
-        array.clear();
-        array.add(this.value);
         context.write(this.word, array);
       }
     }
