@@ -6,8 +6,12 @@ import java.io.DataOutput;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
+import java.util.PriorityQueue;
+import java.util.Queue;
 import java.util.stream.Collectors;
 
 import org.apache.hadoop.conf.Configuration;
@@ -26,6 +30,8 @@ import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
 import org.apache.hadoop.mapreduce.lib.jobcontrol.ControlledJob;
 import org.apache.hadoop.mapreduce.lib.jobcontrol.JobControl;
 import org.apache.hadoop.util.GenericOptionsParser;
+
+import javafx.util.Pair;
 
 public class InvertIndex2 {
 
@@ -102,7 +108,7 @@ public class InvertIndex2 {
         for (int i = 0; i < word.length(); ++i) {
           if (!lexiconTree[pointer].containsKey(word.charAt(i))) {
             lexiconTree[pointer].put(word.charAt(i), lexiconTreeLength);
-            lexiconTree[lexiconTreeLength] = new HashMap<Character,Integer>();
+            lexiconTree[lexiconTreeLength] = new HashMap<Character, Integer>();
             ++lexiconTreeLength;
           }
           pointer = lexiconTree[pointer].get(word.charAt(i));
@@ -130,9 +136,6 @@ public class InvertIndex2 {
             }
             ++r;
           }
-          // if (list.isEmpty()) {
-          //   list.add(Character.toString(sentence.charAt(index)));
-          // }
           for (String word : list) {
             wordDocId.setWord(word);
             context.write(wordDocId, one);
@@ -196,7 +199,7 @@ public class InvertIndex2 {
       return "(" + this.docId + "," + Long.toString(this.frequency) + ')';
     }
 
-    public DocIdFrequency clone(){
+    public DocIdFrequency clone() {
       DocIdFrequency docIdFrequency = new DocIdFrequency();
       docIdFrequency.setDocId(docId);
       docIdFrequency.setFrequency(frequency);
@@ -205,9 +208,75 @@ public class InvertIndex2 {
 
   }
 
-  public static class WordIndexMapper extends Mapper<LongWritable, Text, Text, DocIdFrequency> {
+  public static class DocIdFrequencyArray implements Writable {
+
+    private ArrayList<DocIdFrequency> data = new ArrayList<>();
+
+    public ArrayList<DocIdFrequency> getData() {
+      return data;
+    }
+
+    public void setData(ArrayList<DocIdFrequency> data) {
+      this.data = data;
+    }
+
+    public void add(DocIdFrequency docIdFrequency) {
+      data.add(docIdFrequency);
+    }
+
+    public int size() {
+      return data.size();
+    }
+
+    public void clear() {
+      data.clear();
+    }
+
+    public DocIdFrequency get(Integer index) {
+      return data.get(index);
+    }
+
+    public DocIdFrequencyArray clone() {
+      DocIdFrequencyArray array = new DocIdFrequencyArray();
+      for (DocIdFrequency docIdFrequency : data) {
+        array.add(docIdFrequency.clone());
+      }
+      return array;
+    }
+
+    @Override
+    public void write(DataOutput out) throws IOException {
+      int length = 0;
+      if (data != null) {
+        length = data.size();
+      }
+      out.writeInt(length);
+      for (DocIdFrequency docIdFrequency : data) {
+        docIdFrequency.write(out);
+      }
+    }
+
+    @Override
+    public void readFields(DataInput in) throws IOException {
+      int length = in.readInt();
+      data = new ArrayList<DocIdFrequency>();
+      for (int i = 0; i < length; ++i) {
+        DocIdFrequency docIdFrequency = new DocIdFrequency();
+        docIdFrequency.readFields(in);
+        data.add(docIdFrequency);
+      }
+    }
+
+    public String toString() {
+      return data.stream().map(DocIdFrequency::toString).collect(Collectors.joining(", "));
+    }
+
+  }
+
+  public static class WordIndexMapper extends Mapper<LongWritable, Text, Text, DocIdFrequencyArray> {
     private Text word = new Text();
     private DocIdFrequency value = new DocIdFrequency();
+    private DocIdFrequencyArray array = new DocIdFrequencyArray();
 
     public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
       String[] values = value.toString().split("\t");
@@ -215,25 +284,59 @@ public class InvertIndex2 {
         this.word.set(values[0]);
         this.value.setDocId(values[1]);
         this.value.setFrequency(Long.parseLong(values[2]));
-        context.write(this.word, this.value);
+        array.clear();
+        array.add(this.value);
+        context.write(this.word, array);
       }
     }
   }
 
-  public static class InvertIndexReducer extends Reducer<Text, DocIdFrequency, Text, Text> {
-    private Text text = new Text();
+  public static class InvertIndexReducer extends Reducer<Text, DocIdFrequencyArray, Text, DocIdFrequencyArray> {
 
-    public void reduce(Text key, Iterable<DocIdFrequency> values, Context context) throws IOException, InterruptedException {
-      ArrayList<DocIdFrequency> array = new ArrayList<DocIdFrequency>();
-      for (DocIdFrequency value : values) {
+    public void reduce(Text key, Iterable<DocIdFrequencyArray> values, Context context)
+        throws IOException, InterruptedException {
+      ArrayList<DocIdFrequencyArray> array = new ArrayList<DocIdFrequencyArray>();
+      for (DocIdFrequencyArray value : values) {
         array.add(value.clone());
       }
-      array.sort((a,b)->{
-        if (a.frequency==b.frequency) return 0;
-        return a.frequency<b.frequency?1:-1;
+
+      Queue<Pair<Integer, Integer>> queue = new PriorityQueue<Pair<Integer, Integer>>((a, b) -> {
+        if (a.getKey() == b.getKey()) {
+          return 0;
+        }
+        return a.getKey() - b.getKey();
       });
-      text.set(array.stream().map(DocIdFrequency::toString).collect(Collectors.joining(", ")));
-      context.write(key, text);
+      for (int i = 0; i < array.size(); ++i) {
+        queue.add(new Pair<Integer, Integer>(array.get(i).size(), i));
+      }
+      // 按长度最小的序列进行归并排序
+      while (queue.size() > 1) {
+        DocIdFrequencyArray temp = new DocIdFrequencyArray();
+        Pair<Integer, Integer> first = queue.poll();
+        Pair<Integer, Integer> second = queue.poll();
+        int l = 0, r = 0;
+        while (l < first.getKey() && r < second.getKey()) {
+          if (array.get(first.getValue()).get(l).getFrequency() > array.get(second.getValue()).get(r).getFrequency()) {
+            temp.add(array.get(first.getValue()).get(l));
+            ++l;
+          } else {
+            temp.add(array.get(second.getValue()).get(r));
+            ++r;
+          }
+        }
+        while (l < first.getKey()) {
+          temp.add(array.get(first.getValue()).get(l));
+          ++l;
+        }
+        while (r < second.getKey()) {
+          temp.add(array.get(second.getValue()).get(r));
+          ++r;
+        }
+        array.set(first.getValue(), temp);
+        queue.add(new Pair<Integer, Integer>(temp.size(), first.getValue()));
+      }
+
+      context.write(key, array.get(queue.poll().getValue()));
     }
   }
 
@@ -276,23 +379,24 @@ public class InvertIndex2 {
     job1.waitForCompletion(true);
 
     // job2
-    Job job2 = Job.getInstance(conf, "Invert Index");
+    Job job2 = Job.getInstance(conf, "Inverted Index");
 
     job2.setJarByClass(InvertIndex.class);
     job2.setMapperClass(WordIndexMapper.class);
     job2.setMapOutputKeyClass(Text.class);
-    job2.setMapOutputValueClass(DocIdFrequency.class);
+    job2.setMapOutputValueClass(DocIdFrequencyArray.class);
 
-    // job2.setCombinerClass(InvertIndexReducer.class);
+    job2.setCombinerClass(InvertIndexReducer.class);
     job2.setReducerClass(InvertIndexReducer.class);
-
     job2.setNumReduceTasks(2);
 
+    job2.setOutputKeyClass(Text.class);
+    job2.setOutputValueClass(DocIdFrequencyArray.class);
     FileInputFormat.addInputPath(job2, new Path("/job1"));
 
     FileOutputFormat.setOutputPath(job2, new Path(otherArgs[otherArgs.length - 1]));
 
     job2.waitForCompletion(true);
-   
+
   }
 }
