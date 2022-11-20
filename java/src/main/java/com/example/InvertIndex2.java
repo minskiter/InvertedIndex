@@ -8,6 +8,7 @@ import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.stream.Collectors;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
@@ -195,11 +196,17 @@ public class InvertIndex2 {
       return "(" + this.docId + "," + Long.toString(this.frequency) + ')';
     }
 
+    public DocIdFrequency clone(){
+      DocIdFrequency docIdFrequency = new DocIdFrequency();
+      docIdFrequency.setDocId(docId);
+      docIdFrequency.setFrequency(frequency);
+      return docIdFrequency;
+    }
+
   }
 
-  public static class WordIndexMapper extends Mapper<LongWritable, Text, Text, Text> {
+  public static class WordIndexMapper extends Mapper<LongWritable, Text, Text, DocIdFrequency> {
     private Text word = new Text();
-    private Text text = new Text();
     private DocIdFrequency value = new DocIdFrequency();
 
     public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
@@ -208,25 +215,24 @@ public class InvertIndex2 {
         this.word.set(values[0]);
         this.value.setDocId(values[1]);
         this.value.setFrequency(Long.parseLong(values[2]));
-        this.text.set(this.value.toString());
-        context.write(this.word, this.text);
+        context.write(this.word, this.value);
       }
     }
   }
 
-  public static class InvertIndexReducer extends Reducer<Text, Text, Text, Text> {
+  public static class InvertIndexReducer extends Reducer<Text, DocIdFrequency, Text, Text> {
     private Text text = new Text();
 
-    public void reduce(Text key, Iterable<Text> values, Context context) throws IOException, InterruptedException {
-      ArrayList<String> array = new ArrayList<String>();
-      for (Text value : values) {
-        String[] text = value.toString().split(", ");
-        for (String t : text) {
-          array.add(t);
-        }
+    public void reduce(Text key, Iterable<DocIdFrequency> values, Context context) throws IOException, InterruptedException {
+      ArrayList<DocIdFrequency> array = new ArrayList<DocIdFrequency>();
+      for (DocIdFrequency value : values) {
+        array.add(value.clone());
       }
-
-      text.set(String.join(", ", array.toArray(new String[0])));
+      array.sort((a,b)->{
+        if (a.frequency==b.frequency) return 0;
+        return a.frequency<b.frequency?1:-1;
+      });
+      text.set(array.stream().map(DocIdFrequency::toString).collect(Collectors.joining(", ")));
       context.write(key, text);
     }
   }
@@ -275,9 +281,9 @@ public class InvertIndex2 {
     job2.setJarByClass(InvertIndex.class);
     job2.setMapperClass(WordIndexMapper.class);
     job2.setMapOutputKeyClass(Text.class);
-    job2.setMapOutputValueClass(Text.class);
+    job2.setMapOutputValueClass(DocIdFrequency.class);
 
-    job2.setCombinerClass(InvertIndexReducer.class);
+    // job2.setCombinerClass(InvertIndexReducer.class);
     job2.setReducerClass(InvertIndexReducer.class);
 
     job2.setNumReduceTasks(2);

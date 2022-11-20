@@ -1,10 +1,7 @@
 package com.example;
 
-import java.util.HashSet;
-import java.util.Set;
-
-import com.huaban.analysis.jieba.*;
-import com.huaban.analysis.jieba.JiebaSegmenter.SegMode;
+import java.util.ArrayList;
+import java.util.Iterator;
 
 /**
  * Hello world!
@@ -14,7 +11,16 @@ public class App
 {
     public static void main( String[] args )
     {
-        String a= "123";
-        System.out.println(a.substring(0,a.length()-1));
+        // ArrayList<String> array = new ArrayList<String>();
+        // array.add("test");
+        // array.add("test2");
+        // array.add("test3");
+        // Iterator<String> iter = array.iterator();
+        // ArrayList<String> array2 = new ArrayList<String>();
+        // iter.forEachRemaining(array2::add);
+        // for (String str: array2) {
+        //     System.out.println(str);
+        // }
+        
     }
 }

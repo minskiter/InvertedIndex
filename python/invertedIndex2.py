@@ -49,7 +49,7 @@ wordDocIds = wordDocIdMapper.groupByKey()
 #%%
 from collections import Counter
 def convert(x):
-    return (x[0],list((k,v) for k,v in Counter(list(x[1])).items()))
+    return (x[0],sorted(list((k,v) for k,v in Counter(list(x[1])).items()),key=lambda x:x[1],reverse=True))
 invertedIndex = wordDocIds.map(convert)
 
 #%%
