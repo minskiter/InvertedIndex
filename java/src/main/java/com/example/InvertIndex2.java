@@ -9,6 +9,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
@@ -22,6 +23,7 @@ import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.apache.hadoop.io.WritableComparable;
+import org.apache.hadoop.mapreduce.lib.partition.*;
 import org.apache.hadoop.mapreduce.Job;
 import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
@@ -84,6 +86,13 @@ public class InvertIndex2 {
 
   }
 
+  public static class WordPartitioner extends HashPartitioner<WordDocId, LongWritable> {
+    @Override
+    public int getPartition(WordDocId key, LongWritable value, int numReduceTasks) {
+      return Math.abs(key.getWord().hashCode()) % numReduceTasks;
+    }
+  }
+
   public static class TokenizerMapper
       extends Mapper<LongWritable, Text, WordDocId, LongWritable> {
 
@@ -92,7 +101,10 @@ public class InvertIndex2 {
 
     private int lexiconTreeLength = 1;
     private HashMap<Character, Integer>[] lexiconTree = new HashMap[500000];
-    private HashSet<Integer> isWord = new HashSet<Integer>();
+    private HashSet<Integer> isWord = new HashSet<>();
+    private Integer[] failto = new Integer[500000];
+    private Queue<Integer> queue = new LinkedList<>();
+    private Integer[] depth = new Integer[500000];
 
     public void setup(Context context) throws IOException {
       // 读取字典，创建字典树
@@ -106,15 +118,47 @@ public class InvertIndex2 {
         String word = line.split(" ")[0];
         int pointer = 0;
         for (int i = 0; i < word.length(); ++i) {
-          if (!lexiconTree[pointer].containsKey(word.charAt(i))) {
-            lexiconTree[pointer].put(word.charAt(i), lexiconTreeLength);
+          Character ch = word.charAt(i);
+          if (!lexiconTree[pointer].containsKey(ch)) {
+            lexiconTree[pointer].put(ch, lexiconTreeLength);
             lexiconTree[lexiconTreeLength] = new HashMap<Character, Integer>();
             ++lexiconTreeLength;
           }
-          pointer = lexiconTree[pointer].get(word.charAt(i));
+          pointer = lexiconTree[pointer].get(ch);
         }
         isWord.add(pointer);
         line = reader.readLine();
+      }
+      // 构建KMP失败回溯节点（AC自动机）
+      int root = 0;
+      depth[root] = 0;
+      for (Character ch : lexiconTree[root].keySet()) {
+        Integer cur = lexiconTree[root].get(ch);
+        queue.add(cur);
+        failto[cur] = root;
+        depth[cur] = 1;
+      }
+      while (!queue.isEmpty()) {
+        Integer p = queue.poll();
+        for (Character ch : lexiconTree[p].keySet()) {
+          Integer fail = failto[p];
+          Integer cur = lexiconTree[p].get(ch);
+          while (true) {
+            if (lexiconTree[fail].containsKey(ch)) {
+              failto[cur] = lexiconTree[fail].get(ch);
+              break;
+            } else {
+              if (fail == 0) {
+                failto[cur] = fail;
+                break;
+              }
+              // 尝试再上一个失败节点
+              fail = failto[fail];
+            }
+          }
+          depth[cur] = depth[p] + 1;
+          queue.add(cur);
+        }
       }
     }
 
@@ -123,22 +167,24 @@ public class InvertIndex2 {
       if (ctx.length == 2) {
         wordDocId.setDocId(ctx[0]);
         String sentence = ctx[1];
+        int pointer = 0;
         for (int index = 0; index < sentence.length(); ++index) {
-          int pointer = 0;
-          int r = index;
-          ArrayList<String> list = new ArrayList<String>();
-          StringBuffer buffer = new StringBuffer();
-          while (r < sentence.length() && lexiconTree[pointer].containsKey(sentence.charAt(r))) {
-            buffer.append(sentence.charAt(r));
-            pointer = lexiconTree[pointer].get(sentence.charAt(r));
-            if (isWord.contains(pointer)) {
-              list.add(buffer.toString());
-            }
-            ++r;
+          Character ch = sentence.charAt(index);
+          while (pointer != 0 && !lexiconTree[pointer].containsKey(ch)) {
+            pointer = failto[pointer];
           }
-          for (String word : list) {
-            wordDocId.setWord(word);
-            context.write(wordDocId, one);
+          if (lexiconTree[pointer].containsKey(ch)) {
+            pointer = lexiconTree[pointer].get(ch);
+            int p = pointer;
+            while (p != 0) {
+              if (isWord.contains(p)) {
+                int r = index + 1;
+                int l = r - depth[p];
+                wordDocId.setWord(sentence.substring(l, r));
+                context.write(wordDocId, one);
+              }
+              p = failto[p];
+            }
           }
         }
       }
@@ -231,8 +277,8 @@ public class InvertIndex2 {
       data.add(docIdFrequency);
     }
 
-    public boolean isEmpty(){
-      return size()==0;
+    public boolean isEmpty() {
+      return size() == 0;
     }
 
     public int size() {
@@ -269,13 +315,13 @@ public class InvertIndex2 {
     public void write(DataOutput out) throws IOException {
       int length = 0;
       if (data != null) {
-        length = data.size();  
+        length = data.size();
       }
       out.writeInt(length);
-      if (data!=null)
-      for (DocIdFrequency docIdFrequency : data) {
-        docIdFrequency.write(out);
-      }   
+      if (data != null)
+        for (DocIdFrequency docIdFrequency : data) {
+          docIdFrequency.write(out);
+        }
     }
 
     @Override
@@ -290,7 +336,8 @@ public class InvertIndex2 {
     }
 
     public String toString() {
-      if (data==null) return "";
+      if (data == null)
+        return "";
       return data.stream().map(DocIdFrequency::toString).collect(Collectors.joining(", "));
     }
 
@@ -389,6 +436,7 @@ public class InvertIndex2 {
 
     job1.setCombinerClass(CounterReducer.class);
     job1.setReducerClass(CounterReducer.class);
+    job1.setPartitionerClass(WordPartitioner.class);
     job1.setNumReduceTasks(2);
 
     job1.setOutputKeyClass(WordDocId.class);
