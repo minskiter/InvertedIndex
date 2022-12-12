@@ -451,7 +451,7 @@ public class InvertIndex2 {
         array.add(value.clone());
       }
       // 逆文档频率
-      double documentFrequency = Math.log((double)total/(documentCount+1));  
+      double documentFrequency = Math.log10((double)total/(documentCount+1));  
       // 计算TF-IDF
       for (DocIdFrequencyArray arr:array){
         for (DocIdFrequency frequency:arr.getData()){
