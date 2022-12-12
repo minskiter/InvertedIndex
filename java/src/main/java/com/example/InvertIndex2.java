@@ -3,6 +3,8 @@ package com.example;
 import java.io.BufferedReader;
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.ArrayList;
@@ -13,12 +15,18 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.PriorityQueue;
 import java.util.Queue;
+import java.util.UUID;
 import java.util.stream.Collectors;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FSDataInputStream;
+import org.apache.hadoop.fs.FSDataOutputStream;
+import org.apache.hadoop.fs.FSInputStream;
+import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
+import org.apache.hadoop.fs.LocatedFileStatus;
 import org.apache.hadoop.fs.Path;
+import org.apache.hadoop.fs.RemoteIterator;
 import org.apache.hadoop.io.LongWritable;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
@@ -29,14 +37,12 @@ import org.apache.hadoop.mapreduce.Mapper;
 import org.apache.hadoop.mapreduce.Reducer;
 import org.apache.hadoop.mapreduce.lib.input.FileInputFormat;
 import org.apache.hadoop.mapreduce.lib.output.FileOutputFormat;
-import org.apache.hadoop.mapreduce.lib.jobcontrol.ControlledJob;
-import org.apache.hadoop.mapreduce.lib.jobcontrol.JobControl;
 import org.apache.hadoop.util.GenericOptionsParser;
 
 import javafx.util.Pair;
 
 public class InvertIndex2 {
-
+  //#region 第一次MapReduce 计算词在文档中出现的次数
   public static class WordDocId implements WritableComparable<WordDocId> {
 
     private String word;
@@ -95,6 +101,8 @@ public class InvertIndex2 {
 
   public static class TokenizerMapper
       extends Mapper<LongWritable, Text, WordDocId, LongWritable> {
+
+    private Long documentCount = 0L;
 
     private WordDocId wordDocId = new WordDocId();
     private LongWritable one = new LongWritable(1);
@@ -164,6 +172,7 @@ public class InvertIndex2 {
 
     public void map(LongWritable key, Text value, Context context) throws IOException, InterruptedException {
       String[] ctx = value.toString().split("\t");
+      documentCount++;
       if (ctx.length == 2) {
         wordDocId.setDocId(ctx[0]);
         String sentence = ctx[1];
@@ -189,6 +198,20 @@ public class InvertIndex2 {
         }
       }
     }
+
+    @Override
+    protected void cleanup(Context context) throws IOException{
+      Configuration configuration = context.getConfiguration();
+      FileSystem fs = FileSystem.get(configuration);
+      String name = "/temp/documentcount/"+UUID.randomUUID().toString();
+      FSDataOutputStream output;
+      if (!fs.exists(new Path(name))){
+          output = fs.create(new Path(name));
+      }else{
+        output = fs.append(new Path(name));
+      }
+      output.writeLong(documentCount);
+    }
   }
 
   public static class CounterReducer
@@ -206,11 +229,53 @@ public class InvertIndex2 {
       context.write(key, result);
     }
   }
+  //#endregion 
 
+  //#region 第二次MapReduce计算词的TF
+  public static class TokenFrequencyMapper extends Mapper<LongWritable,Text,LongWritable,Text>{
+    private LongWritable documentId = new LongWritable();
+    private Text value = new Text();
+
+    public void map(LongWritable offset, Text text, Context context) throws IOException,InterruptedException{
+      String [] values = text.toString().split("\t");
+      if (values.length==3){
+        documentId.set(Long.parseLong(values[1]));
+        value.set(values[0]+"\t"+values[2]);
+        context.write(documentId, value);
+      }else{
+        throw new Error("格式不符合");
+      }
+    }
+  }
+
+  public static class TokenFrequencyReduce extends Reducer<LongWritable,Text,Text,Text>{
+    private Text key = new Text();
+    private Text value = new Text();
+
+    public void reduce(LongWritable documentId, Iterable<Text> values, Context context) throws IOException,InterruptedException{
+      Long total = 0L;
+      ArrayList<String[]> collections = new ArrayList<>();
+      for (Text val:values){
+        String [] v = val.toString().split("\t");
+        collections.add(v);
+        Long frequency = Long.parseLong(v[1]);
+        total+=frequency;
+      }
+      for (String [] item:collections){
+        key.set(item[0]);
+        double frequency = (double)Long.parseLong(item[1])/total;
+        value.set(documentId.toString()+'\t'+Double.toString(frequency));
+        context.write(key, value);
+      }
+    }
+  }
+  //#endregion
+
+  //#region 第三次MapReduce计算逆文档排序同时进行排序
   public static class DocIdFrequency implements Writable {
 
     private String docId;
-    private Long frequency;
+    private Double frequency;
 
     public void setDocId(String docId) {
       this.docId = docId;
@@ -220,29 +285,29 @@ public class InvertIndex2 {
       return docId;
     }
 
-    public void setFrequency(Long frequency) {
+    public void setFrequency(Double frequency) {
       this.frequency = frequency;
     }
 
-    public Long getFrequency() {
+    public Double getFrequency() {
       return frequency;
     }
 
     @Override
     public void write(DataOutput out) throws IOException {
       out.writeUTF(this.docId);
-      out.writeLong(this.frequency);
+      out.writeDouble(this.frequency);
     }
 
     @Override
     public void readFields(DataInput in) throws IOException {
       this.docId = in.readUTF();
-      this.frequency = in.readLong();
+      this.frequency = in.readDouble();
     }
 
     @Override
     public String toString() {
-      return "(" + this.docId + "," + Long.toString(this.frequency) + ')';
+      return "(" + this.docId + "," + Double.toString(this.frequency) + ')';
     }
 
     public DocIdFrequency clone() {
@@ -355,7 +420,7 @@ public class InvertIndex2 {
       if (values.length == 3) {
         this.word.set(values[0]);
         this.value.setDocId(values[1]);
-        this.value.setFrequency(Long.parseLong(values[2]));
+        this.value.setFrequency(Double.parseDouble(values[2]));
         context.write(this.word, array);
       }
     }
@@ -363,11 +428,35 @@ public class InvertIndex2 {
 
   public static class InvertIndexReducer extends Reducer<Text, DocIdFrequencyArray, Text, DocIdFrequencyArray> {
 
+    long total = 0L;
+
+    public void setup(Context context) throws IOException,FileNotFoundException{
+      Configuration configuration = context.getConfiguration();
+      FileSystem fs = FileSystem.get(configuration);
+      RemoteIterator<LocatedFileStatus> file = fs.listFiles(new Path("/temp/documentcount/"), false);
+      while (file.hasNext()){
+        LocatedFileStatus nxt = file.next();
+        FSDataInputStream stream = fs.open(nxt.getPath());
+        long count = stream.readLong();
+        total+=count;
+      }
+    }
+
     public void reduce(Text key, Iterable<DocIdFrequencyArray> values, Context context)
         throws IOException, InterruptedException {
       ArrayList<DocIdFrequencyArray> array = new ArrayList<DocIdFrequencyArray>();
+      long documentCount  = 0L;
       for (DocIdFrequencyArray value : values) {
+        documentCount+=value.getData().size();
         array.add(value.clone());
+      }
+      // 逆文档频率
+      double documentFrequency = Math.log((double)total/(documentCount+1));  
+      // 计算TF-IDF
+      for (DocIdFrequencyArray arr:array){
+        for (DocIdFrequency frequency:arr.getData()){
+          frequency.setFrequency(frequency.getFrequency() * documentFrequency);
+        }
       }
 
       Queue<Pair<Integer, Integer>> queue = new PriorityQueue<Pair<Integer, Integer>>((a, b) -> {
@@ -409,6 +498,7 @@ public class InvertIndex2 {
       context.write(key, array.get(queue.poll().getValue()));
     }
   }
+  //#endregion
 
   public static void main(String[] args) throws Exception {
 
@@ -423,51 +513,53 @@ public class InvertIndex2 {
 
     // clear output directory
     fileSystem.delete(new Path(otherArgs[otherArgs.length - 1]), true);
-    fileSystem.delete(new Path("/job1"), true);
+    fileSystem.delete(new Path("/temp"), true);
 
     // job1
-    Job job1 = Job.getInstance(conf, "Word Frequency Counter");
-
-    job1.setJarByClass(InvertIndex.class);
+    Job job1 = Job.getInstance(conf, "WordCount");
+    job1.setJarByClass(InvertIndex2.class);
     job1.setMapperClass(TokenizerMapper.class);
-
     job1.setMapOutputKeyClass(WordDocId.class);
     job1.setMapOutputValueClass(LongWritable.class);
-
     job1.setCombinerClass(CounterReducer.class);
     job1.setReducerClass(CounterReducer.class);
     job1.setPartitionerClass(WordPartitioner.class);
     job1.setNumReduceTasks(2);
-
     job1.setOutputKeyClass(WordDocId.class);
     job1.setOutputValueClass(LongWritable.class);
     for (int i = 0; i < otherArgs.length - 1; ++i) {
       FileInputFormat.addInputPath(job1, new Path(otherArgs[i]));
     }
-    FileOutputFormat.setOutputPath(job1,
-        new Path("/job1"));
-
+    FileOutputFormat.setOutputPath(job1,new Path("/temp/job1"));
     job1.waitForCompletion(true);
 
     // job2
-    Job job2 = Job.getInstance(conf, "Inverted Index");
-
-    job2.setJarByClass(InvertIndex.class);
-    job2.setMapperClass(WordIndexMapper.class);
-    job2.setMapOutputKeyClass(Text.class);
-    job2.setMapOutputValueClass(DocIdFrequencyArray.class);
-
-    job2.setCombinerClass(InvertIndexReducer.class);
-    job2.setReducerClass(InvertIndexReducer.class);
+    Job job2 = Job.getInstance(conf,"TokenFrequency");
+    job2.setJarByClass(InvertIndex2.class);
+    job2.setMapperClass(TokenFrequencyMapper.class);
+    job2.setMapOutputKeyClass(LongWritable.class);
+    job2.setMapOutputValueClass(Text.class);
+    job2.setReducerClass(TokenFrequencyReduce.class);
     job2.setNumReduceTasks(2);
-
     job2.setOutputKeyClass(Text.class);
-    job2.setOutputValueClass(DocIdFrequencyArray.class);
-    FileInputFormat.addInputPath(job2, new Path("/job1"));
-
-    FileOutputFormat.setOutputPath(job2, new Path(otherArgs[otherArgs.length - 1]));
-
+    job2.setOutputValueClass(Text.class);
+    FileInputFormat.addInputPath(job2, new Path("/temp/job1"));
+    FileOutputFormat.setOutputPath(job2, new Path("/temp/job2"));
     job2.waitForCompletion(true);
+
+    // job3
+    Job job3 = Job.getInstance(conf, "Inverted Index");
+    job3.setJarByClass(InvertIndex2.class);
+    job3.setMapperClass(WordIndexMapper.class);
+    job3.setMapOutputKeyClass(Text.class);
+    job3.setMapOutputValueClass(DocIdFrequencyArray.class);
+    job3.setReducerClass(InvertIndexReducer.class);
+    job3.setNumReduceTasks(2);
+    job3.setOutputKeyClass(Text.class);
+    job3.setOutputValueClass(DocIdFrequencyArray.class);
+    FileInputFormat.addInputPath(job3, new Path("/temp/job2"));
+    FileOutputFormat.setOutputPath(job3, new Path(otherArgs[otherArgs.length - 1]));
+    job3.waitForCompletion(true);
 
   }
 }
